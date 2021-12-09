@@ -46,92 +46,245 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Neusha Saboorian, ncs866
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+This dataset comes from the "Data Is Plural" collective and consists of what were originally four different datasets reporting nutrition value for select foods by the Government of Canada in the Canada Nutrient File database. The new tidied and joined data set named "food" consists of the foods studied, the types of nutrients estimated for every food, the nutrient value for each, and their corresponding units of measure among other variables. After joining to construct my new dataset, "food" consisted of 4,288 distinct foods and drinks and measured 151 different nutrients. I selected this data because I have always been focused on improving my own nutrition, and since the U.S. does not have a great reputation for healthy eating, Canada was the next best option in terms of foods available and widely consumed in North America. I predict that this dataset will allow me to relate many foods to their strength in specific nutrients (some may be surprising) which is knowledge I can apply to my own dietary choices. 
 
 ```{R}
 library(tidyverse)
-# read your datasets in here, e.g., with read_csv()
 
-# if your dataset needs tidying, do so here
+food_name <- read_csv("/stor/home/ncs866/project2/FOOD NAME.csv")
+nutrient_amount <- read_csv("/stor/home/ncs866/project2/NUTRIENT AMOUNT.csv")
+nutrient_name <- read_csv("/stor/home/ncs866/project2/NUTRIENT NAME.csv")
+nutrient_source <- read_csv("/stor/home/ncs866/project2/NUTRIENT SOURCE.csv")
 
-# any other code here
+inner_join(nutrient_source, nutrient_amount, by="NutrientSourceID") -> first_join
+first_join
+food1 <- inner_join(first_join, nutrient_name, by="NutrientID")
+food1
+food <- left_join(food_name, food1, by="FoodID")
+food
+food <- food %>% select(-2, -3, -4, -6, -7, -9, -14, -16, -17, -19, -20, -21)
+food <- food %>% select(1,2,5,9, everything())
+food <- na.omit(food)
+food
+
+food %>% count(FoodDescription)
+food %>% count(n_distinct(NutrientName))
 ```
 
 ### Cluster Analysis
 
+
 ```{R}
 library(cluster)
-# clustering code here
+first_6000 <- food[1:6000, ]
+pam_dat<-first_6000%>%select(is.numeric)
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(pam_dat, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+pam1 <- first_6000 %>% pam(k=10)
+final <-first_6000 %>% select(is.numeric) %>% scale %>% as.data.frame
+final <- final %>% mutate(cluster=as.factor(pam1$clustering))
+library(GGally)
+ggpairs(final, columns=1:7, aes(color=cluster))
+plot(pam1,which=2)
+
 ```
 
-Discussion of clustering here
+PAM clustering was performed on the first 6000 rows of the food data set in order to maximize efficiency however, the clustering was performed on all of the numeric variables within the data set. Next, a clustering plot was added with ggpairs which allowed us to visualize all pairwise combinations of variables colored by cluster assignment. Based on this plot, the variables NutrientCode and NutrientID had the highest correlation, which is understandable given that the data collectors related the two to the same nutrient when collecting. PAM clustering generated ten clusters with an average silhouette width of only 0.48. This value indicates that prediction via PAM clustering is weak and the structure could be artificial. This could be due to the fact that too many numerical variables were involved in this clustering, especially considering some of them solely served as a label or ID number and do not relate to actual nutrient value of the foods observed. 
     
     
 ### Dimensionality Reduction with PCA
 
+
 ```{R}
-# PCA code here
+food_nums <- food %>% select(where(is.numeric)) %>% scale
+rownames(food_nums) <-  food$FoodDescription
+food_pca <-  princomp(food_nums)
+names(food_pca)
+summary(food_pca, loadings=T)
+eigen(cor(food_nums))
+
+eigval <-  food_pca$sdev^2 
+varprop=round(eigval/sum(eigval), 2) 
+
+fooddf <-  data.frame(PC1=food_pca$scores[, 1], PC2=food_pca$scores[, 2])
+
+
+ggplot(fooddf, aes(PC1, PC2)) + geom_point()
+
+
+ggplot(fooddf, aes(PC1, PC2)) + geom_point() + 
+  stat_ellipse(data=fooddf[fooddf$PC1>  5.0, ], aes(PC1, PC2), color="blue") + 
+  stat_ellipse(data=fooddf[fooddf$PC1< -3.8, ], aes(PC1, PC2), color="blue") + 
+  stat_ellipse(data=fooddf[fooddf$PC2> 2.75, ], aes(PC1, PC2), color="red") + 
+  stat_ellipse(data=fooddf[fooddf$PC2< -3.5, ], aes(PC1, PC2), color="red")
 ```
 
-Discussions of PCA here. 
+This PCA reduced all numerical variables into 7 principal components. PC1 explains 28% of the variance of these variables as seen by the largest eigenvalue os 1.965 and PC7 explains the smallest variance of the data with only 2%. Although this is not a particularly high value of proportion of variance explained by PC1, we are able to use this PC to predict the variance in each other variable. For example, foods that score high on PC1 tend to have a lower nutrient value and standard error. As the standard error observations are calculated from the nutrient value recorded, this relation is rational as explained by PCA. The same can be observed in PC2, when the higher one scores, the higher the nutrient value and the standard error. As can be seen by the plot, most observations that scored higher on PC1 also scored lower on PC2; notwithstanding some outliers. 
 
 ###  Linear Classifier
 
+
 ```{R}
-# linear classifier code here
+food <- food %>% mutate(Source = ifelse(NutrientSourceDescription == "Calculated using a recipe",1,0))
+head(food)
+fit <- glm(Source ~ NutrientValue + NutrientID + StandardError + NumberofObservations + FoodID, data = food, family = "binomial")
+prob_reg <- predict(fit, type = "response")
+class_diag(prob_reg, food$Source, positive = 1)
+
 ```
 
 ```{R}
-# cross-validation of linear classifier here
+set.seed(1234)
+k=10 
+data<-food[sample(nrow(food)),] 
+folds<-cut(seq(1:nrow(food)),breaks=k,labels=F) 
+diags<-NULL
+for(i in 1:k){
+  
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$Source 
+  
+  fit<-glm(Source~ NutrientValue + NutrientID + StandardError + NumberofObservations + FoodID, data=train,family="binomial")
+  
+  probs<-predict(fit,newdata = test,type="response")
+  
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags,mean)
 ```
 
-Discussion here
+The AUC of the logisitc regression performed for predicting source of the nutrients was 0.9464, indicating a highly accurate form of fitting. In fact, the accuracy value itself totaled to 99.66% supporting the quality of the logisitc regression model. However, when performing k-fold CV of the logistic regression model, the AUC dropped by 0.009 of a point, an incredibly minute difference. Thus, one can assume that the model does not shows signs of overfitting. This is most likely due to the formation of a column labeled "source" which classifies the nutrient source response of "calculated using a recipe" as positive; providing a clear predictor.  
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
-# non-parametric classifier code here
+knn_fit <- knn3(Source ~ NutrientValue + NutrientID + StandardError + NumberofObservations + FoodID, data=food)
+prob_knn <- predict(knn_fit, newdata = food)[,2]
+class_diag(prob_knn, truth = food$Source, positive=1)
 ```
 
 ```{R}
-# cross-validation of np classifier here
+set.seed(322)
+k=10
+
+data<-sample_frac(food) 
+folds <- rep(1:k, length.out=nrow(data)) 
+
+diags<-NULL
+
+i=1
+for(i in 1:k){
+
+train<-data[folds!=i,] 
+test<-data[folds==i,] 
+truth<-test$Source
+
+
+fit <- knn3(Source ~ NutrientValue + NutrientID + StandardError + NumberofObservations + FoodID, data=train)
+
+
+probs <- predict(fit, newdata = test)[,2]
+
+
+diags<-rbind(diags,class_diag(probs,truth, positive= 1)) }
+
+
+summarize_all(diags,mean)
+
 ```
 
-Discussion
+After using knn as a non-parametric classifier to predict the source of nutrients, the AUC value came out to 99.9%; the highest yet. This indicates that using a knn fit is the most accurate method for predicting source from all other numeric variables (accuracy = 99.9%). However, the model did show signs of overfitting when preforming a k-fold CV, as the AUC decreased to 0.9368, a noticeable drop from the near 100% value previously. 
 
 
 ### Regression/Numeric Prediction
 
+
 ```{R}
-# regression model code here
+food_reg <- food %>% select(-FoodDescription) %>% select(-NutrientName) %>% select(-NutrientSourceDescription)
+head(food_reg)
+library(rpart); library(rpart.plot)
+fit<- rpart(NutrientValue~., data=food_reg)
+rpart.plot(fit)
+
+library(caret)
+fit <- train(NutrientValue~., data=food_reg, method="rpart")
+fit$bestTune
+rpart.plot(fit$finalModel)
+
+yhat<-predict(fit)
+mean((food_reg$NutrientValue-yhat)^2)
 ```
 
 ```{R}
-# cross-validation of regression model here
+library(rpart)
+set.seed(1234)
+k=10 
+data<-food_reg[sample(nrow(food)),] 
+folds<-cut(seq(1:nrow(food_reg)),breaks=k,labels=F) 
+MSE<-NULL
+for(i in 1:k){
+  
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$NutrientValue 
+  
+  fit<-rpart(NutrientValue~ ., data=train)
+  
+  pred<-predict(fit,newdata = test)
+  
+  MSE<-cbind(MSE,mean((truth-pred)^2))
+}
+mean(MSE)
 ```
 
-Discussion
+The data set was fit to a linear regression tree in order to predict nutrient value from all other numeric variables as seen by the final row containing nearly 0% of the data. However, the first tree generated included far too many variables to best predict nutrient value from, as can be seen by its bulkiness made particularly by the many names of nutrients that were tested for. The refined tree shows only the variables of standard error and nutrient ID in order to predict nutrient value. However, this tree still does not serve as an accurate method of predicting the nutrient value of foods, as the standard error and nutrient ID either branch off into 100% or 0% of the data set. The tree could be a better classifier of nutrient value if other variables such as a numerical ranking of nutrient value or calorie information was provided in the data. The MSE was total to 77254.60 when predicted out of sample. After performing k-fold CV the MSE came to a value of 77435.77. This increase in MSE shows that the model shows signs of overfitting, as seen by the large value of both MSE.
 
 ### Python 
+    
 
 ```{R}
+
 library(reticulate)
+use_python("/usr/bin/python3")
+#py_install('matplotlib')
+#py_install('numpy')
+#py_install('pandas')
+
+library(dplyr)
+food %>% select(-2) -> food1
+
+food %>% arrange(desc(NutrientValue)) 
+
+food %>% arrange(desc(NutrientValue)) %>% arrange(StandardError)
+
+food %>% filter(FoodID == 503355) %>% filter(NutrientValue == 0)
+
 ```
 
 ```{python}
-# python code here
+import pandas as pd
+r.food1["NutrientValue"].max()
+r.food1["NutrientValue"].median()
+r.food1["NutrientValue"].min()
+(r.food1.filter(['NutrientValue','FoodID'])
+ .sort_values('NutrientValue').head(3))
 ```
 
-Discussion
+In the R chunk above, basic wrangling was done to manipulate the food dataset into a separate dataset named "food1" to make it able to run through python. In addition, the original food dataset was wrangled to provide some insight into its properties, namely I was able to find that canned tomato paste had the highest individual nutrient value, in terms of the nutrient lycopene a powerful antioxidant and carotenoid. Meanwhile, when taking into account standard error, the food with the highest nutrient value becomes the spice mix 'shake and bake' with a sodium nutrient value of 4030 and a standard error of 0. This shows that although foods can be  high in nutrient value, it does not necessarily mean it is the healthiest nutrient, or by those same standards, the healthiest food. In the python chunk below, reticulate was used to call the food1 dataset in R to report the minimum, median, and maximum values of nutrient value in the dataset. Additionally, a chain of commands was applied to food1 in order to note that the food with the lowest nutrient value is ID number 503355. This food was determined to be babyfood cereal with powdered milk and fruits which has no value in the monosaccharide galactose and many fatty acids. The absence of galactose is noted in the diets of infants that are born with innate errors in metabolizing this sugar, which can cause a condition called 'galactosemia.'
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+Overall, the modeling of this dataset bore less information than desired when predicting nutrient value in a wide range of foods. Potential issues may have arisen with the size of the dataset, where thousands of food items were recorded, perhaps sampling a fraction of these foods and modeling from there would provide better fitting predictions in the future. 
 
 
 
